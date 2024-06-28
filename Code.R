@@ -1,0 +1,102 @@
+library(tm)
+library(caret)
+library(tm)
+library(wordcloud)
+
+# Define the dataset
+data_text <- read.csv("spam.csv", stringsAsFactors = FALSE)
+
+str(data_text)
+head(data_text)
+colnames(data_text) <- c("Class", "Text")
+colnames(data_text)
+data_text$Class <- factor(data_text$Class)
+prop.table(table(data_text$Class))
+
+library(SnowballC)
+corpus = VCorpus(VectorSource(data_text$Text))
+as.character(corpus[[1]])
+
+corpus = tm_map(corpus, content_transformer(tolower))
+corpus = tm_map(corpus, removeNumbers)
+corpus = tm_map(corpus, removePunctuation)
+corpus = tm_map(corpus, removeWords, stopwords("english"))
+corpus = tm_map(corpus, stemDocument)
+corpus = tm_map(corpus, stripWhitespace)
+as.character(corpus[[1]])
+
+dtm = DocumentTermMatrix(corpus)
+dtm
+
+dtm = removeSparseTerms(dtm, 0.999)
+dim(dtm)
+
+inspect(dtm[40:50, 10:15])
+
+convert_count <- function(x) {
+  y <- ifelse(x > 0, 1,0)
+  y <- factor(y, levels=c(0,1), labels=c("No", "Yes"))
+  y
+}
+
+# Apply the convert_count function to get final training and testing DTMs
+datasetNB <- apply(dtm, 2, convert_count)
+
+dataset = as.data.frame(as.matrix(datasetNB))
+
+freq<- sort(colSums(as.matrix(dtm)), decreasing=TRUE)
+tail(freq, 10)
+
+findFreqTerms(dtm, lowfreq=60) #identifying terms that appears frequently
+
+library(ggplot2)
+
+wf<- data.frame(word=names(freq), freq=freq)
+head(wf)
+
+pp <- ggplot(subset(wf, freq>100), aes(x=reorder(word, -freq), y =freq)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x=element_text(angle=45, hjust=1))
+pp
+library("RColorBrewer")
+set.seed(1234)
+wordcloud(words = wf$word, freq = wf$freq, min.freq = 1,
+          max.words=200, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+dataset$Class = data_text$Class
+str(dataset$Class)
+
+set.seed(222)
+split = sample(2,nrow(dataset),prob = c(0.75,0.25),replace = TRUE)
+train_set = dataset[split == 1,]
+test_set = dataset[split == 2,] 
+
+prop.table(table(train_set$Class))
+prop.table(table(test_set$Class))
+
+library(e1071)
+# Train SVM model
+svm_model <- svm(Class ~ ., data = train_set, kernel = "radial")
+
+# Train Naive Bayes model
+nb_model <- naiveBayes(Class ~ ., data = train_set)
+
+# Predictions from SVM and Naive Bayes models
+svm_pred <- predict(svm_model, newdata = test_set, decision.values = TRUE)
+nb_pred <- predict(nb_model, newdata = test_set)
+
+svm_weight <- 0.4  # Weight for SVM predictions
+nb_weight <- 0.6   # Weight for Naive Bayes predictions
+
+# Combine predictions using weighted voting
+ensemble_pred_prob <- (as.numeric(svm_pred == "spam") * svm_weight) + (as.numeric(nb_pred == "spam") * nb_weight)
+
+# Determine the ensemble prediction
+ensemble_pred <- ifelse(ensemble_pred_prob > 0.5, 1, 0)
+
+# Calculate accuracy
+accuracy <- mean(ensemble_pred == test_set$Class)
+print(paste("Accuracy:", accuracy))
+
+confusionMatrix(nb_pred,test_set$Class)
+confusionMatrix(svm_pred,test_set$Class)
